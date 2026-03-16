@@ -1,5 +1,6 @@
 # Distributed-Communication-System
 CSC 2400 Final Project
+
 Matthew DiGiovanni, Adrian Motaharian, Hunter Mullen
 
 Modern communication systems rely on servers to handle message transfer between users. However, if one of these servers goes down, others need to be able to take its place. In normal chat systems, the down server would result in the entire system being down. In a distributed chat system, multiple servers contain the messages and any can step in if one goes down. Given that it is nearly impossible to guarantee a server that never fails, ensuring the resilience of online communication is essential. Distributed systems provide the scalability, fault tolerance, and performance necessary in the massive digital world that has been built.
