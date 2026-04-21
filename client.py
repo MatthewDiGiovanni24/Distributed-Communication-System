@@ -8,6 +8,8 @@ port = 1001
 # connect to server on locally
 s.connect(("127.0.0.1", port))
 
+username = input("Enter your username: ")
+s.send(username.encode())
 
 def read():
     while True:
@@ -17,7 +19,8 @@ def read():
 
 def write():
     while True:
-        s.send(input().encode())
+       msg = input()
+       s.send(msg.encode())
 
 
 receive_thread = threading.Thread(target=read)

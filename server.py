@@ -13,6 +13,7 @@ s.bind(("", port))
 s.listen()
 
 clients = []
+usernames = {}
 message_history = []   # stores all messages
 lock = threading.Lock()
 
@@ -22,7 +23,7 @@ def broadcast(message, _client):
     for client in clients:
         if client != _client:
             try:
-                client.send(message)
+                client.send(message.encode())
             except:
                 pass
 
@@ -34,9 +35,18 @@ def handle_client(client):
             message = client.recv(1024)
             if not message:
                 raise Exception("Client disconnected")
-            broadcast(message, client)
+            username = usernames[client]
+            formatted = username + ": " + message.decode()
+            with lock:
+                message_history.append(formatted)
+
+            broadcast(formatted, client)
+
         except:
-            clients.remove(client)
+            if client in clients:
+                clients.remove(client)
+            if client in usernames:
+                del usernames[client]
             client.close()
             break
 
@@ -44,7 +54,15 @@ def handle_client(client):
 while True:
     client, address = s.accept()
     print("Client Connected")
+
+    username = client.recv(1024).decode()
+    usernames[client] = username
+
     clients.append(client)
+
+    with lock:
+        for msg in message_history:
+            client.send(msg.encode())
 
     thread = threading.Thread(target=handle_client, args=(client,))
     thread.start()
