@@ -13,13 +13,18 @@ s.bind(("", port))
 s.listen()
 
 clients = []
+message_history = []   # stores all messages
+lock = threading.Lock()
 
 
 # send to all clients except itself
 def broadcast(message, _client):
     for client in clients:
         if client != _client:
-            client.send(message)
+            try:
+                client.send(message)
+            except:
+                pass
 
 
 # removes disconnected clients
@@ -27,6 +32,8 @@ def handle_client(client):
     while True:
         try:
             message = client.recv(1024)
+            if not message:
+                raise Exception("Client disconnected")
             broadcast(message, client)
         except:
             clients.remove(client)
