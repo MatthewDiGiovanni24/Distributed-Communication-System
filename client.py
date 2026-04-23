@@ -13,14 +13,21 @@ s.send(username.encode())
 
 def read():
     while True:
-        message = s.recv(1024).decode()
-        print(message)
+        try:
+            message = s.recv(1024).decode()
+            print(message)
+        except:
+            print("Disconnected from server")
+            break
 
 
 def write():
     while True:
-       msg = input()
-       s.send(msg.encode())
+        try:
+            msg = input()
+            s.send(msg.encode())
+        except:
+            break
 
 
 receive_thread = threading.Thread(target=read)
