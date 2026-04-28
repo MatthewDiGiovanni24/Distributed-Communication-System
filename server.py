@@ -32,14 +32,13 @@ message_history = []   # stores all messages
 seen_messages = set()
 lock = threading.Lock()
 
-server_id = "SERVER-" + str(server_number)
-
-leader_exists = False
+server_id = server_number
 server_role = "FOLLOWER"
+leader_id = None
 
-if not leader_exists:
-    server_role = "LEADER"
-    leader_exists = True
+last_heartbeat = time.time()
+election_running = False
+
 
 # send to all clients except itself
 def broadcast(message, _client=None):
@@ -51,32 +50,79 @@ def broadcast(message, _client=None):
                 pass
 
 
+def send_raw(peer_port, message):
+    try:
+        peer = socket.socket()
+        peer.settimeout(2)
+        peer.connect(("127.0.0.1", peer_port))
+        peer.send(message.encode())
+        peer.close()
+        return True
+    except:
+        return False
+
+
 def send_to_peers(message):
     for peer_port in peer_ports[server_number]:
-        try:
-            peer = socket.socket()
-            peer.connect(("127.0.0.1", peer_port))
-            peer.send(("SERVERMSG|" + message).encode())
-            peer.close()
-        except:
-            pass
+        send_raw(peer_port, "SERVERMSG|" + message)
 
-# heartbeat from leader every 5 seconds
+def become_leader():
+    global leader_id, server_role
+
+    leader_id = server_id
+    server_role = "LEADER"
+
+    print("SERVER-" + str(server_id) + " became LEADER")
+
+    for peer_port in peer_ports[server_number]:
+        send_raw(peer_port, "COORDINATOR|" + str(server_id))
+
+    broadcast("[SYSTEM] SERVER-" + str(server_id) + " is now leader")
+
+
+def start_election():
+    global election_running
+
+    if election_running:
+        return
+
+    election_running = True
+
+    higher_servers = []
+
+    if server_id == 1:
+        higher_servers = [2, 3]
+    elif server_id == 2:
+        higher_servers = [3]
+
+    got_reply = False
+
+    for sid in higher_servers:
+        peer_port = 1000 + sid
+        if send_raw(peer_port, "ELECTION|" + str(server_id)):
+            got_reply = True
+
+    if not got_reply:
+        become_leader()
+
+    election_running = False
+
 def heartbeat():
-    announced = False
+    global last_heartbeat, leader_id, server_role
 
     while True:
-        time.sleep(5)
+        time.sleep(2)
 
-        if server_role == "LEADER" and not announced:
-            broadcast("[SYSTEM] " + server_id + " is now active as LEADER")
-            print(server_id + " is LEADER")
-            announced = True
+        if server_role == "LEADER":
+            for peer_port in peer_ports[server_number]:
+                send_raw(peer_port, "HEARTBEAT|" + str(server_id))
 
-        if server_role != "LEADER":
-            announced = False
+        else:
+            if time.time() - last_heartbeat > 6:
+                print("Leader lost. Starting election...")
+                leader_id = None
+                start_election()
 
-# removes disconnected clients
 def handle_client(client):
     while True:
         try:
@@ -88,7 +134,9 @@ def handle_client(client):
 
             if text == "/leader":
                 client.send(
-                    ("[SYSTEM] Current leader: " + server_id + "\n").encode()
+                    ("[SYSTEM] Current leader: SERVER-" +
+                     str(leader_id) +
+                     "\n").encode()
                 )
                 continue
 
@@ -121,6 +169,8 @@ def handle_client(client):
             break
 
 def handle_connection(conn):
+    global leader_id, server_role, last_heartbeat
+
     try:
         first = conn.recv(1024).decode().strip()
 
@@ -138,6 +188,39 @@ def handle_connection(conn):
             conn.close()
             return
 
+        if first.startswith("HEARTBEAT|"):
+            sender = int(first.split("|")[1])
+
+            leader_id = sender
+            last_heartbeat = time.time()
+
+            if sender != server_id:
+                server_role = "FOLLOWER"
+
+            conn.close()
+            return
+
+        if first.startswith("ELECTION|"):
+            sender = int(first.split("|")[1])
+
+            if server_id > sender:
+                threading.Thread(target=start_election).start()
+
+            conn.close()
+            return
+
+        # new leader announcement
+        if first.startswith("COORDINATOR|"):
+            leader_id = int(first.split("|")[1])
+            server_role = "FOLLOWER"
+            last_heartbeat = time.time()
+
+            print("SERVER-" + str(leader_id) + " is LEADER")
+
+            conn.close()
+            return
+
+        # normal client connection
         username = first
 
         usernames[conn] = username
@@ -160,8 +243,8 @@ def handle_connection(conn):
                 conn.send((msg + "\n").encode())
 
         conn.send(
-            ("[SYSTEM] Connected to " +
-             server_id +
+            ("[SYSTEM] Connected to SERVER-" +
+             str(server_id) +
              " (" +
              server_role +
              ")\n").encode()
@@ -176,7 +259,8 @@ def handle_connection(conn):
 heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
 heartbeat_thread.start()
 
-print(server_id + " running on port " + str(port))
+threading.Thread(target=start_election, daemon=True).start()
+print("SERVER-" + str(server_id) + " running on port " + str(port))
 
 while True:
     client, address = s.accept()
