@@ -38,6 +38,7 @@ leader_id = None
 
 last_heartbeat = time.time()
 election_running = False
+message_id = 0
 
 
 # send to all clients except itself
@@ -124,6 +125,7 @@ def heartbeat():
                 start_election()
 
 def handle_client(client):
+    global message_id
     while True:
         try:
             message = client.recv(1024)
@@ -140,7 +142,12 @@ def handle_client(client):
                 )
                 continue
 
-            formatted = username + ": " + text
+            if server_role == "LEADER":
+                with lock:
+                    message_id += 1
+                    formatted = f"[{message_id}] {username}: {text}"
+            else:
+                formatted = f"{username}: {text}"
 
             with lock:
                 if formatted not in seen_messages:
@@ -148,7 +155,8 @@ def handle_client(client):
                     message_history.append(formatted)
 
             print(formatted)
-            broadcast(formatted)
+            public = formatted.split("] ", 1)[-1] if formatted.startswith("[") else formatted
+            broadcast(public)
             send_to_peers(formatted)
 
         except:
