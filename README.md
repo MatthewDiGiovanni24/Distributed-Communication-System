@@ -2,6 +2,12 @@
 
 By Matthew DiGiovanni, Adrian Motaharian, Hunter Mullen
 
+Version 1.1
+Added Lamport logical clocks for message ordering
+Added Synchronization of message state on server startup
+
+Version 1.0
+
 This project is a fault-tolerant distributed messaging system in Python using multithreading and TCP socket programming across replicated servers. Severs contain heartbeats and leader election algorithms to recover from server failures within 8 seconds while maintaining a synchronized message state across nodes.
             
 When the servers are live and a client attempts to connect, the client first requests a username. After a name is created the leader server acknowledges the specific user that joined and broadcasts that join message to the system. Once two users are connected either can type messages into their console. These messages are sent through a local socket to the connected server which then broadcasts the message with the other clients and servers. The leader server also continuously checks the connection with the clients and announces disconnections if they appear. An important feature of the system is the ability for clients to reconnect if a server fails. If the connected server crashes or disconnects, the client automatically attempts to connect to another available server from the list of known servers. This process repeats until another server becomes available. 
