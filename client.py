@@ -1,6 +1,7 @@
 import socket
 import threading
 import time
+import sys
 
 servers = [
     ("127.0.0.1", 1001),
@@ -16,6 +17,12 @@ current_server = 0
 def connect():
     global s, current_server
 
+    if s is not None:
+        try:
+            s.close()
+        except Exception:
+            pass
+
     while True:
         try:
             host, port = servers[current_server]
@@ -28,7 +35,7 @@ def connect():
             print(f"Connected to server {port}")
             return
 
-        except:
+        except Exception:
             print("Failed.")
 
             current_server = (current_server + 1) % len(servers)
@@ -40,14 +47,21 @@ def read():
 
     while True:
         try:
-            msg = s.recv(1024).decode()
+            buf = b""
+            while True:
+                chunk = s.recv(4096)
+                if not chunk:
+                    raise ConnectionError("Disconnected")
+                buf += chunk
+                if b"\n" in buf:
+                    break
 
-            if not msg:
-                raise Exception()
+            msg = buf.decode(errors="replace").strip()
+            if msg:
+                print(msg)
+                sys.stdout.flush()
 
-            print(msg)
-
-        except:
+        except Exception:
             print("Server lost. Reconnecting...")
             connect()
 
@@ -58,9 +72,11 @@ def write():
     while True:
         try:
             msg = input()
-            s.send(msg.encode())
+            if not msg:
+                continue
+            s.sendall(msg.encode())
 
-        except:
+        except Exception:
             print("Send failed. Reconnecting...")
             connect()
 

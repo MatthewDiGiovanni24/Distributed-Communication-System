@@ -59,12 +59,27 @@ def update_clock(received_time):
         return lamport_clock
 
 def broadcast(message, _client=None):
-    for client in clients:
-        if client != _client:
-            try:
-                client.send((message + "\n").encode())
-            except:
-                pass
+    dead_clients = []
+    for client in list(clients):
+        if client == _client:
+            continue
+        try:
+            client.sendall((message + "\n").encode())
+        except Exception:
+            dead_clients.append(client)
+
+    for client in dead_clients:
+        try:
+            clients.remove(client)
+        except ValueError:
+            pass
+
+def forward_to_leader(message):
+    if leader_id is None:
+        return False
+
+    leader_port = 1000 + leader_id
+    return send_raw(leader_port, "FORWARD|" + message)
 
 
 def send_raw(peer_port, message):
@@ -72,10 +87,10 @@ def send_raw(peer_port, message):
         peer = socket.socket()
         peer.settimeout(2)
         peer.connect(("127.0.0.1", peer_port))
-        peer.send(message.encode())
+        peer.sendall(message.encode())
         peer.close()
         return True
-    except:
+    except Exception:
         return False
 
 
@@ -141,8 +156,6 @@ def request_sync():
     if leader_id == server_id:
         is_fresh_start = False
         return
-
-    print(f"Requesting sync from SERVER-{leader_id}...")
 
     try:
         peer = socket.socket()
@@ -216,7 +229,7 @@ def handle_client(client):
             if not message:
                 raise Exception("Client disconnected")
             username = usernames[client]
-            text = message.decode()
+            text = message.decode().strip()
 
             if text == "/leader":
                 client.send(
@@ -226,24 +239,28 @@ def handle_client(client):
                 )
                 continue
 
-            if server_role == "LEADER":
+            if leader_id == server_id:
                 with lock:
                     message_id += 1
                     ts = increment_clock()
                     formatted = f"[{message_id}][LT:{ts}] {username}: {text}"
+
+                with lock:
+                    if formatted not in seen_messages:
+                        seen_messages.add(formatted)
+                        message_history.append(formatted)
+
+                print(formatted)
+                broadcast(formatted)
+                send_to_peers(formatted)
             else:
-                formatted = f"{username}: {text}"
+                if not forward_to_leader(f"{username}: {text}"):
+                    client.send(
+                        f"[SYSTEM] Unable to forward message to SERVER-{leader_id}\n".encode()
+                    )
+                continue
 
-            with lock:
-                if formatted not in seen_messages:
-                    seen_messages.add(formatted)
-                    message_history.append(formatted)
-
-            print(formatted)
-            broadcast(formatted)
-            send_to_peers(formatted)
-
-        except:
+        except Exception:
             if client in clients:
                 clients.remove(client)
 
@@ -260,20 +277,30 @@ def handle_client(client):
             client.close()
             break
 
+def accept_connections():
+    while True:
+        try:
+            conn, _ = s.accept()
+            threading.Thread(target=handle_connection, args=(conn,), daemon=True).start()
+        except Exception:
+            pass
+
+
 def handle_connection(conn):
-    global leader_id, server_role, last_heartbeat
+    global leader_id, server_role, last_heartbeat, message_id
 
     try:
         first = conn.recv(1024).decode().strip()
 
         if first.startswith("SERVERMSG|"):
             msg = first.replace("SERVERMSG|", "", 1)
+            print(f"SERVERMSG received: {msg[:50]}, clients connected: {len(clients)}")
 
             if "[LT:" in msg:
                 try:
                     lt_part = msg.split("[LT:")[1].split("]")[0]
                     update_clock(int(lt_part))
-                except:
+                except Exception:
                     pass
 
             with lock:
@@ -330,6 +357,28 @@ def handle_connection(conn):
             conn.close()
             return
 
+        if first.startswith("FORWARD|"):
+            print(f"FORWARD received on SERVER-{server_id}, role={server_role}")
+            msg = first.replace("FORWARD|", "", 1)
+
+            if leader_id == server_id:
+                with lock:
+                    message_id += 1
+                    ts = increment_clock()
+                    formatted = f"[{message_id}][LT:{ts}] {msg}"
+
+                with lock:
+                    if formatted not in seen_messages:
+                        seen_messages.add(formatted)
+                        message_history.append(formatted)
+
+                print(formatted)
+                broadcast(formatted)
+                send_to_peers(formatted)
+
+            conn.close()
+            return
+
         # normal client connection
         username = first
 
@@ -348,23 +397,34 @@ def handle_connection(conn):
         broadcast(join_msg)
         send_to_peers(join_msg)
 
-        with lock:
-            for msg in message_history:
-                conn.send((msg + "\n").encode())
+        try:
+            with lock:
+                for msg in message_history:
+                    conn.sendall((msg + "\n").encode())
 
-        conn.send(
-            ("[SYSTEM] Connected to SERVER-" +
-             str(server_id) +
-             " (" +
-             server_role +
-             ")\n").encode()
-        )
+            conn.sendall(
+                ("[SYSTEM] Connected to SERVER-" +
+                 str(server_id) +
+                 " (" +
+                 server_role +
+                 ")\n").encode()
+            )
+        except Exception:
+            if conn in clients:
+                clients.remove(conn)
+            if conn in usernames:
+                del usernames[conn]
+            conn.close()
+            return
 
         thread = threading.Thread(target=handle_client, args=(conn,))
         thread.start()
 
-    except:
+    except Exception:
         conn.close()
+
+accept_thread = threading.Thread(target=accept_connections, daemon=True)
+accept_thread.start()
 
 heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
 heartbeat_thread.start()
@@ -374,5 +434,4 @@ threading.Thread(target=request_sync, daemon=True).start()
 print("SERVER-" + str(server_id) + " running on port " + str(port))
 
 while True:
-    client, address = s.accept()
-    threading.Thread(target=handle_connection, args=(client,)).start()
+    time.sleep(1)
