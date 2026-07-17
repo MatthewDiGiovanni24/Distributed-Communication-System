@@ -8,6 +8,8 @@ Added Lamport logical clocks for message ordering
 
 Added Synchronization of message state on server startup
 
+Added forwarding of messages to leader
+
 # Version 1.0
 
 This project is a fault-tolerant distributed messaging system in Python using multithreading and TCP socket programming across replicated servers. Severs contain heartbeats and leader election algorithms to recover from server failures within 8 seconds while maintaining a synchronized message state across nodes.
