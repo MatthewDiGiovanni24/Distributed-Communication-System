@@ -5,6 +5,9 @@ import time
 s = socket.socket()
 print("Socket successfully created")
 
+lamport_clock = 0
+clock_lock = threading.Lock()
+
 server_number = int(input("Server number (1/2/3): "))
 
 if server_number == 1:
@@ -39,9 +42,22 @@ leader_id = None
 last_heartbeat = time.time()
 election_running = False
 message_id = 0
+is_fresh_start = True
 
 
 # send to all clients except itself
+def increment_clock():
+    global lamport_clock
+    with clock_lock:
+        lamport_clock += 1
+        return lamport_clock
+
+def update_clock(received_time):
+    global lamport_clock
+    with clock_lock:
+        lamport_clock = max(lamport_clock, received_time) + 1
+        return lamport_clock
+
 def broadcast(message, _client=None):
     for client in clients:
         if client != _client:
@@ -108,11 +124,79 @@ def start_election():
 
     election_running = False
 
+def request_sync():
+    global message_history, seen_messages, is_fresh_start
+
+    timeout = time.time() + 8
+    while leader_id is None:
+        if time.time() > timeout:
+            print("No leader found, skipping sync")
+            is_fresh_start = False
+            threading.Thread(target=start_election, daemon=True).start()
+            return
+        time.sleep(0.5)
+
+    leader_port = 1000 + leader_id
+
+    if leader_id == server_id:
+        is_fresh_start = False
+        return
+
+    print(f"Requesting sync from SERVER-{leader_id}...")
+
+    try:
+        peer = socket.socket()
+        peer.settimeout(5)
+        peer.connect(("127.0.0.1", leader_port))
+        peer.send(f"SYNC_REQUEST|{server_id}".encode())
+
+        data = b""
+        while True:
+            chunk = peer.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+            if b"\n" in data:
+                break
+
+        peer.close()
+
+        response = data.decode().strip()
+
+        if not response.startswith("SYNC_RESPONSE|"):
+            print("Bad sync response")
+            is_fresh_start = False
+            threading.Thread(target=start_election, daemon=True).start()
+            return
+
+        history_raw = response.replace("SYNC_RESPONSE|", "", 1)
+
+        if history_raw:
+            messages = history_raw.split("||")
+            with lock:
+                for msg in messages:
+                    if msg and msg not in seen_messages:
+                        seen_messages.add(msg)
+                        message_history.append(msg)
+
+            print(f"Synced {len(messages)} messages from SERVER-{leader_id}")
+        else:
+            print("No history to sync")
+
+    except Exception as e:
+        print(f"Sync failed: {e}")
+
+    is_fresh_start = False
+    threading.Thread(target=start_election, daemon=True).start()
+
 def heartbeat():
-    global last_heartbeat, leader_id, server_role
+    global last_heartbeat, leader_id, server_role, is_fresh_start
 
     while True:
         time.sleep(2)
+
+        if is_fresh_start:
+            continue
 
         if server_role == "LEADER":
             for peer_port in peer_ports[server_number]:
@@ -145,7 +229,8 @@ def handle_client(client):
             if server_role == "LEADER":
                 with lock:
                     message_id += 1
-                    formatted = f"[{message_id}] {username}: {text}"
+                    ts = increment_clock()
+                    formatted = f"[{message_id}][LT:{ts}] {username}: {text}"
             else:
                 formatted = f"{username}: {text}"
 
@@ -155,8 +240,7 @@ def handle_client(client):
                     message_history.append(formatted)
 
             print(formatted)
-            public = formatted.split("] ", 1)[-1] if formatted.startswith("[") else formatted
-            broadcast(public)
+            broadcast(formatted)
             send_to_peers(formatted)
 
         except:
@@ -184,6 +268,13 @@ def handle_connection(conn):
 
         if first.startswith("SERVERMSG|"):
             msg = first.replace("SERVERMSG|", "", 1)
+
+            if "[LT:" in msg:
+                try:
+                    lt_part = msg.split("[LT:")[1].split("]")[0]
+                    update_clock(int(lt_part))
+                except:
+                    pass
 
             with lock:
                 if msg not in seen_messages:
@@ -228,6 +319,17 @@ def handle_connection(conn):
             conn.close()
             return
 
+        if first.startswith("SYNC_REQUEST|"):
+            requester_id = int(first.split("|")[1])
+            print(f"SERVER-{requester_id} requesting sync...")
+
+            with lock:
+                history_data = "||".join(message_history)
+
+            conn.send(f"SYNC_RESPONSE|{history_data}\n".encode())
+            conn.close()
+            return
+
         # normal client connection
         username = first
 
@@ -267,7 +369,8 @@ def handle_connection(conn):
 heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
 heartbeat_thread.start()
 
-threading.Thread(target=start_election, daemon=True).start()
+threading.Thread(target=request_sync, daemon=True).start()
+
 print("SERVER-" + str(server_id) + " running on port " + str(port))
 
 while True:
