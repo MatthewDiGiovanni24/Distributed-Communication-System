@@ -5,6 +5,7 @@ By Matthew DiGiovanni, Adrian Motaharian, Hunter Mullen
 # Version 1.1
 
 Added Lamport logical clocks for message ordering
+
 Added Synchronization of message state on server startup
 
 # Version 1.0
